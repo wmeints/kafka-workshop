@@ -1,4 +1,4 @@
-package nl.infosupport.kafkaworkshop.helloworld;
+package nl.infosupport.kafkaworkshop.queueing;
 
 import kafka.javaapi.producer.Producer;
 import kafka.producer.KeyedMessage;

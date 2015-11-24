@@ -1,4 +1,4 @@
-package nl.infosupport.kafkaworkshop.helloworld;
+package nl.infosupport.kafkaworkshop.queueing;
 
 import kafka.consumer.Consumer;
 import kafka.consumer.ConsumerConfig;
