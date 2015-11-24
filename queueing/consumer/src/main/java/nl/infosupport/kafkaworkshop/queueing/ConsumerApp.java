@@ -1,18 +1,13 @@
 package nl.infosupport.kafkaworkshop.queueing;
 
-import kafka.consumer.Consumer;
-import kafka.consumer.ConsumerConfig;
-import kafka.consumer.ConsumerIterator;
-import kafka.consumer.KafkaStream;
-import kafka.javaapi.consumer.*;
-import kafka.message.MessageAndMetadata;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Properties;
+import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
@@ -23,75 +18,47 @@ public class ConsumerApp {
     public static void main(String[] args) throws Exception {
 
         // Required properties:
-        //  - zookeeper host used to discover brokers in your cluster from which messages need to be fetched
+        //  - broker host used to discover brokers in your cluster from which messages need to be fetched
         //  - group ID to identify the application that is fetching (you can have multiple instances of a consumer)
 
         Properties consumerProperties = new Properties();
-        consumerProperties.put("zookeeper.connect", "localhost:2181");
+        consumerProperties.put("bootstrap.servers", "localhost:9092");
         consumerProperties.put("group.id", "consumerapp");
 
-        ConsumerConnector consumerConnector =
-                Consumer.createJavaConsumerConnector(
-                        new ConsumerConfig(consumerProperties));
+        // Set some default deserializers for the consumed messages.
+        // This is required because otherwise Kafka doesn't know what to do with the data.
+        consumerProperties.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
+        consumerProperties.put("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
 
-        consumerConnector.commitOffsets();
+        KafkaConsumer<String,String> consumer = new KafkaConsumer<String, String>(consumerProperties);
 
-        // Kafka is capable of using multiple threads to process incoming messages.
-        // However, for a queueing scenario you have to leave this to just one, otherwise this turns into a troublesome
-        // scenario pretty quickly!
-        Map<String, Integer> topicCount = new HashMap<>();
-        topicCount.put("events", 1);
+        // Always call subscribe first!
+        // Otherwise you can poll all you want, but get nothing in return.
+        consumer.subscribe(Arrays.asList("events"));
 
-        ExecutorService threadPool = Executors.newFixedThreadPool(1);
-        Map<String, List<KafkaStream<byte[], byte[]>>> consumerStreams = consumerConnector.createMessageStreams(topicCount);
+        while(true) {
+            Map<TopicPartition, OffsetAndMetadata> committedOffsets = new HashMap<>();
 
-        for (KafkaStream<byte[], byte[]> stream : consumerStreams.get("events")) {
-            log.info("Starting message handler for topic events");
-            threadPool.submit(new MessageHandler(consumerConnector, stream));
-        }
+            // Use a polling timeout to retrieve messages.
+            // Increase the timeout value to slow down the message flow and decrease the load on the brokers.
+            // You will get more messages each time you poll with a longer timeout setting.
+            // But it does mean you have to wait longer for the messages to come in.
+            ConsumerRecords<String,String> records = consumer.poll(100);
 
-        // The rest of this method is a nasty trick to prevent Java from shutting down on us.
-        // Please ignore this and don't use if you have better ways to control the runtime.
-        Semaphore signal = new Semaphore(0, false);
+            records.forEach(msg -> {
+                log.info("Received message: {}",msg.value());
 
-        Runtime.getRuntime().addShutdownHook(new Thread() {
-            public void run() {
-                threadPool.shutdown();
-                signal.release();
-            }
-        });
+                // Mark the current message as processed by putting them in the commit map.
+                // Any messages that fail to process are left out of this map.
+                committedOffsets.put(
+                        new TopicPartition(msg.topic(), msg.partition()),
+                        new OffsetAndMetadata(msg.offset()));
+            });
 
-        signal.acquire();
-    }
-
-    private static class MessageHandler implements Runnable {
-        private final ConsumerConnector consumer;
-        private final KafkaStream<byte[], byte[]> stream;
-        private final Logger log = LoggerFactory.getLogger(MessageHandler.class);
-
-        public MessageHandler(ConsumerConnector consumer, KafkaStream<byte[], byte[]> stream) {
-            this.consumer = consumer;
-            this.stream = stream;
-        }
-
-        public void run() {
-            // The iterator used in this method never ends unless you stop the threadpool
-            // This means that you don't have to worry about exit conditions here ;-)
-            ConsumerIterator<byte[], byte[]> iterator = stream.iterator();
-
-            while (iterator.hasNext()) {
-                MessageAndMetadata<byte[], byte[]> messageData = iterator.next();
-
-                // WARNING: If your producer does not provide a key, this method will never complete.
-                // This is due to the fact that Kafka blocks the call until it finds the data for the key, which
-                // is of course not available if you don't provide a key.
-                log.info("Received message {}", new String(new String(messageData.message())));
-
-                // When using Kafka in a queueing scenario you have to disable to autocommit setting
-                // and start committing offsets yourself. Committing is an expensive operation so this slows
-                // the whole application down. If you can, save up a few commits and send one request.
-                consumer.commitOffsets();
-            }
+            // Mark the processed messages as committed on the server.
+            // With Kafka you can have multiple messages that are uncomitted, just leave them
+            // out of the map and commit the rest using the commitSync or commitAsync method.
+            consumer.commitSync(committedOffsets);
         }
     }
 }

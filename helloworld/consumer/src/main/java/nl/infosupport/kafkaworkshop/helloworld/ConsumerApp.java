@@ -13,7 +13,7 @@ public class ConsumerApp {
     public static void main(String[] args) throws Exception {
 
         // Required properties:
-        //  - zookeeper host used to discover brokers in your cluster from which messages need to be fetched
+        //  - broker host used to discover brokers in your cluster from which messages need to be fetched
         //  - group ID to identify the application that is fetching (you can have multiple instances of a consumer)
 
         Properties consumerProperties = new Properties();
@@ -31,10 +31,19 @@ public class ConsumerApp {
         consumerProperties.put("auto.commit.interval.ms", "1000");
 
         KafkaConsumer<String, String> consumer = new KafkaConsumer<String, String>(consumerProperties);
+
+        // Always call subscribe first!
+        // Otherwise you can poll all you want, but get nothing in return.
         consumer.subscribe(Arrays.asList("events"));
 
         while (true) {
+            // Use a polling timeout to retrieve messages.
+            // Increase the timeout value to slow down the message flow and decrease the load on the brokers.
+            // You will get more messages each time you poll with a longer timeout setting.
+            // But it does mean you have to wait longer for the messages to come in.
             ConsumerRecords<String, String> records = consumer.poll(100);
+
+            // Process the messages here.
             records.forEach(msg -> log.info("Received message: {}", msg.value()));
         }
     }
